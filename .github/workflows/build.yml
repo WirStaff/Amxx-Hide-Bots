@@ -1,0 +1,104 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows x86
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: >
+          cmake -S . -B cmake-build-win32
+          -G "Visual Studio 17 2022"
+          -A Win32
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build cmake-build-win32 --target hide_bots --config Release --parallel
+
+      - name: Stage Windows artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact/addons/amxmodx/modules
+          Copy-Item out/bin/Release/hide_bots_amxx.dll artifact/addons/amxmodx/modules/
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hide_bots-windows-win32
+          path: artifact
+          if-no-files-found: error
+          retention-days: 14
+
+  build-linux:
+    name: Linux i386
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build in Ubuntu 14.04 container
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace ubuntu:14.04 bash -c '
+            set -e
+            
+            # Add PPA for newer GCC
+            apt-get update
+            apt-get install -y software-properties-common
+            add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            apt-get update
+            
+            # Install build dependencies with multilib support
+            apt-get install -y \
+              gcc-9 g++-9 gcc-9-multilib g++-9-multilib \
+              make wget \
+              libc6-dev libc6-dev-i386 \
+              lib32stdc++-9-dev
+            
+            # Install CMake 3.10+
+            wget -q https://cmake.org/files/v3.16/cmake-3.16.9-Linux-x86_64.tar.gz
+            tar -xzf cmake-3.16.9-Linux-x86_64.tar.gz
+            export PATH=$(pwd)/cmake-3.16.9-Linux-x86_64/bin:$PATH
+            
+            # Set GCC 9 as default
+            update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90
+            update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 90
+            
+            # Build
+            mkdir -p build
+            cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release
+            cmake --build . --target hide_bots -j$(nproc)
+          '
+
+      - name: Stage Linux artifact
+        run: |
+          mkdir -p artifact/addons/amxmodx/modules
+          cp out/bin/Release/hide_bots_amxx_i386.so artifact/addons/amxmodx/modules/
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hide_bots-linux-i386
+          path: artifact
+          if-no-files-found: error
+          retention-days: 14
