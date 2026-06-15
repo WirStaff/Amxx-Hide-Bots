@@ -15,7 +15,7 @@
  *   to add multiple entries.
  */
 #define MODULE_NAME "Hide Bots"
-#define MODULE_VERSION "1.2.0"
+#define MODULE_VERSION "2.0.0"
 #define MODULE_AUTHOR "Wirstaff"
 #define MODULE_URL "https://t.me/wirstaff_inc"
 #define MODULE_LOGTAG "HB"

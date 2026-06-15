@@ -192,7 +192,8 @@ cell AMX_NATIVE_CALL NativeSetBotCount(AMX* amx, cell* params)
 {
     static_cast<void>(amx);
 
-    hide_bots::SetBotCount(params[1]);
+    const cell count = params && params[0] >= static_cast<cell>(sizeof(cell)) ? params[1] : 0;
+    hide_bots::SetBotCount(static_cast<int>(count));
     return 0;
 }
 

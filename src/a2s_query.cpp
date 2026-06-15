@@ -238,27 +238,6 @@ bool ReadPlayerRecord(const unsigned char* packetBytes, int packetLength, int& c
     return true;
 }
 
-int CountZeroIndexes(const unsigned char* packetBytes, int packetLength, int cursor, int originalCount)
-{
-    int zeroIndexes = 0;
-    int parsedCount = 0;
-
-    while (parsedCount < originalCount && cursor < packetLength) {
-        PlayerRecord record;
-        if (!ReadPlayerRecord(packetBytes, packetLength, cursor, record)) {
-            break;
-        }
-
-        if (record.index == 0) {
-            ++zeroIndexes;
-        }
-
-        ++parsedCount;
-    }
-
-    return zeroIndexes;
-}
-
 }
 
 bool IsA2SPlayerQuery(const char* args, uint32_t& challenge)
@@ -363,8 +342,6 @@ bool RewriteA2SPlayersIndexes(
     const int maxPlayers = GetMaxPlayers();
     const int wantedCount = maxPlayers > 0 && originalCount > maxPlayers ? maxPlayers : originalCount;
     const int recordsPosition = payloadOffset + 2;
-    const int zeroIndexes = CountZeroIndexes(packetBytes, packetLength, recordsPosition, originalCount);
-    const bool rewriteSyntheticBots = zeroIndexes > 1;
 
     ResponseWriter writer(rewrittenPacket, rewrittenCapacity);
     if (payloadOffset == 4 && !WriteConnectionlessHeader(writer)) {
@@ -391,22 +368,12 @@ bool RewriteA2SPlayersIndexes(
         }
 
         if (visibleCount < wantedCount) {
-            char syntheticName[64] = {};
-            const char* name = record.name;
-            float duration = record.duration;
-
-            if (rewriteSyntheticBots && record.index == 0) {
-                BuildSyntheticPlayerName(visibleCount, syntheticName, sizeof(syntheticName));
-                name = syntheticName;
-                duration = GetSyntheticPlayerDuration(visibleCount);
-            }
-
             if (!WritePlayerRecord(
                     writer,
                     static_cast<unsigned char>(visibleCount),
-                    name,
+                    record.name,
                     record.score,
-                    duration)) {
+                    record.duration)) {
                 break;
             }
 
@@ -423,7 +390,7 @@ bool RewriteA2SPlayersIndexes(
     writer.SetByte(rewrittenCountPosition, static_cast<unsigned char>(visibleCount));
     rewrittenLength = writer.Position();
 
-    return visibleCount > 0 || originalCount != 0;
+    return true;
 }
 
 int GetPlayerSlot(const edict_t* entity)

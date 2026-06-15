@@ -15,6 +15,20 @@ using SteamGameServerFn = ISteamGameServer* (S_CALLTYPE*)();
 
 ISteamGameServer* g_SteamGameServer = nullptr;
 int g_BotsCount = 0;
+constexpr int kMaxSteamBotCount = 255;
+
+int NormalizeBotCount(int count)
+{
+    if (count < 0) {
+        return 0;
+    }
+
+    if (count > kMaxSteamBotCount) {
+        return kMaxSteamBotCount;
+    }
+
+    return count;
+}
 
 #ifdef _WIN32
 using SteamApiLibrary = HMODULE;
@@ -115,7 +129,7 @@ ISteamGameServer* GetExistingSteamGameServer()
 
 void SetBotCount(int count)
 {
-    g_BotsCount = count;
+    g_BotsCount = NormalizeBotCount(count);
 }
 
 void HideSteamBots()
