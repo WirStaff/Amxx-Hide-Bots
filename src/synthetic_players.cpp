@@ -22,6 +22,93 @@ float g_LastSyntheticServerTime = 0.0f;
 uint32_t g_RandomState = 0;
 const char kBase62Alphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+struct NamePart {
+    const char* text = "";
+    int chars = 0;
+};
+
+const NamePart kEnglishPrefixes[] = {
+    {"x", 1},
+    {"Mr", 2},
+    {"No", 2},
+    {"Neo", 3},
+    {"Pro", 3},
+    {"Top", 3},
+    {"Old", 3},
+    {"Red", 3},
+    {"Sky", 3},
+    {"Ice", 3},
+};
+
+const NamePart kRussianPrefixes[] = {
+    {"\xD0\xBD\xD0\xB5\xD0\xBE", 3},
+    {"\xD0\xBF\xD1\x80\xD0\xBE", 3},
+    {"\xD1\x82\xD0\xBE\xD0\xBF", 3},
+    {"\xD0\xBC\xD0\xB0\xD0\xBA\xD1\x81", 4},
+    {"\xD0\xBB\xD0\xB0\xD0\xB9\xD1\x82", 4},
+    {"\xD1\x80\xD0\xB5\xD0\xB9\xD0\xB4", 4},
+};
+
+const NamePart kEnglishCores[] = {
+    {"Neon", 4},
+    {"Ghost", 5},
+    {"Cyber", 5},
+    {"Storm", 5},
+    {"Flash", 5},
+    {"Frost", 5},
+    {"Nitro", 5},
+    {"Drift", 5},
+    {"Pixel", 5},
+    {"Pulse", 5},
+    {"Orbit", 5},
+    {"Mirage", 6},
+    {"Vector", 6},
+    {"Sniper", 6},
+    {"Rocket", 6},
+    {"Fusion", 6},
+};
+
+const NamePart kRussianCores[] = {
+    {"\xD0\xBD\xD0\xB5\xD0\xBE\xD0\xBD", 4},
+    {"\xD1\x82\xD0\xB5\xD0\xBD\xD1\x8C", 4},
+    {"\xD0\xB3\xD1\x80\xD0\xBE\xD0\xBC", 4},
+    {"\xD1\x84\xD0\xBE\xD1\x80\xD1\x81", 4},
+    {"\xD1\x84\xD0\xBB\xD0\xB5\xD1\x88", 4},
+    {"\xD0\xBA\xD0\xB8\xD0\xB1\xD0\xB5\xD1\x80", 5},
+    {"\xD0\xBA\xD0\xB2\xD0\xB5\xD1\x81\xD1\x82", 5},
+    {"\xD0\xBC\xD0\xB8\xD1\x80\xD0\xB0\xD0\xB6", 5},
+    {"\xD1\x81\xD0\xBD\xD0\xB0\xD0\xB9\xD0\xBF", 5},
+    {"\xD1\x88\xD1\x82\xD0\xBE\xD1\x80\xD0\xBC", 5},
+    {"\xD0\xBF\xD1\x83\xD0\xBB\xD1\x8C\xD1\x81", 5},
+    {"\xD1\x80\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x80", 5},
+    {"\xD0\xBD\xD0\xB8\xD1\x82\xD1\x80\xD0\xBE", 5},
+    {"\xD0\xB4\xD1\x80\xD0\xB8\xD1\x84\xD1\x82", 5},
+    {"\xD1\x81\xD0\xBA\xD0\xB8\xD0\xBB\xD0\xBB", 5},
+    {"\xD0\xB2\xD0\xB5\xD0\xBA\xD1\x82\xD0\xBE\xD1\x80", 6},
+};
+
+const NamePart kEnglishSuffixes[] = {
+    {"X", 1},
+    {"Z", 1},
+    {"GG", 2},
+    {"Ok", 2},
+    {"Er", 2},
+    {"Aim", 3},
+    {"Run", 3},
+    {"Win", 3},
+    {"One", 3},
+};
+
+const NamePart kRussianSuffixes[] = {
+    {"\xD0\xBE\xD0\xBA", 2},
+    {"\xD1\x8B\xD1\x87", 2},
+    {"\xD0\xB5\xD1\x80", 2},
+    {"\xD0\xB8\xD0\xBA", 2},
+    {"\xD1\x87\xD0\xB8\xD0\xBA", 3},
+    {"\xD0\xBF\xD1\x80\xD0\xBE", 3},
+    {"\xD1\x82\xD0\xBE\xD0\xBF", 3},
+};
+
 float GetSyntheticServerTime()
 {
     if (gpGlobals) {
@@ -85,37 +172,81 @@ void AppendByte(char* buffer, std::size_t capacity, std::size_t& position, unsig
     buffer[position++] = static_cast<char>(value);
 }
 
-void AppendUtf8CodePoint(char* buffer, std::size_t capacity, std::size_t& position, uint32_t codePoint)
+bool AppendText(char* buffer, std::size_t capacity, std::size_t& position, const char* text)
 {
-    if (codePoint <= 0x7Fu) {
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(codePoint));
-    } else if (codePoint <= 0x7FFu) {
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(0xC0u | (codePoint >> 6)));
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(0x80u | (codePoint & 0x3Fu)));
-    } else {
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(0xE0u | (codePoint >> 12)));
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(0x80u | ((codePoint >> 6) & 0x3Fu)));
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(0x80u | (codePoint & 0x3Fu)));
+    const std::size_t bytes = std::strlen(text);
+    if (position + bytes >= capacity) {
+        return false;
     }
+
+    std::memcpy(buffer + position, text, bytes);
+    position += bytes;
+    return true;
 }
 
-void AppendRandomNameChar(char* buffer, std::size_t capacity, std::size_t& position)
+bool AppendPart(char* buffer, std::size_t capacity, std::size_t& position, int& chars, const NamePart& part)
 {
-    const uint32_t kind = NextRandom() % 10u;
-    if (kind < 4u) {
-        const bool upper = (NextRandom() & 1u) != 0;
-        const unsigned char base = upper ? static_cast<unsigned char>('A') : static_cast<unsigned char>('a');
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>(base + (NextRandom() % 26u)));
-    } else if (kind < 8u) {
-        const bool upper = (NextRandom() & 1u) != 0;
-        const uint32_t base = upper ? 0x0410u : 0x0430u;
-        AppendUtf8CodePoint(buffer, capacity, position, base + (NextRandom() % 32u));
-    } else {
-        AppendByte(buffer, capacity, position, static_cast<unsigned char>('0' + (NextRandom() % 10u)));
+    if (!AppendText(buffer, capacity, position, part.text)) {
+        return false;
     }
+
+    chars += part.chars;
+    return true;
 }
 
-void AppendUniqueNameSuffix(int syntheticIndex, char* buffer, std::size_t capacity, std::size_t& position)
+template <std::size_t Count>
+const NamePart* PickFittingPart(const NamePart (&parts)[Count], int maxChars)
+{
+    if (maxChars <= 0) {
+        return nullptr;
+    }
+
+    const std::size_t start = static_cast<std::size_t>(NextRandom() % Count);
+
+    for (std::size_t offset = 0; offset < Count; offset++) {
+        const NamePart& part = parts[(start + offset) % Count];
+        if (part.chars <= maxChars) {
+            return &part;
+        }
+    }
+
+    return nullptr;
+}
+
+const NamePart* PickPrefix(int maxChars)
+{
+    if ((NextRandom() & 1u) != 0) {
+        return PickFittingPart(kEnglishPrefixes, maxChars);
+    }
+
+    return PickFittingPart(kRussianPrefixes, maxChars);
+}
+
+const NamePart* PickCore(int maxChars)
+{
+    if ((NextRandom() & 1u) != 0) {
+        return PickFittingPart(kEnglishCores, maxChars);
+    }
+
+    return PickFittingPart(kRussianCores, maxChars);
+}
+
+const NamePart* PickSuffix(int maxChars)
+{
+    if ((NextRandom() & 1u) != 0) {
+        return PickFittingPart(kEnglishSuffixes, maxChars);
+    }
+
+    return PickFittingPart(kRussianSuffixes, maxChars);
+}
+
+void AppendDigit(char* buffer, std::size_t capacity, std::size_t& position, int& chars)
+{
+    AppendByte(buffer, capacity, position, static_cast<unsigned char>('0' + (NextRandom() % 10u)));
+    chars++;
+}
+
+void AppendUniqueNameSuffix(int syntheticIndex, char* buffer, std::size_t capacity, std::size_t& position, int& chars)
 {
     const std::size_t alphabetSize = sizeof(kBase62Alphabet) - 1;
     const std::size_t first = static_cast<std::size_t>(syntheticIndex) % alphabetSize;
@@ -123,6 +254,7 @@ void AppendUniqueNameSuffix(int syntheticIndex, char* buffer, std::size_t capaci
 
     AppendByte(buffer, capacity, position, static_cast<unsigned char>(kBase62Alphabet[first]));
     AppendByte(buffer, capacity, position, static_cast<unsigned char>(kBase62Alphabet[second]));
+    chars += 2;
 }
 
 bool IsSyntheticNameUsed(const char* name, int syntheticIndex)
@@ -143,10 +275,16 @@ void BuildFallbackSyntheticName(int syntheticIndex, char* buffer, std::size_t ca
     const std::size_t alphabetSize = sizeof(kBase62Alphabet) - 1;
     uint32_t value = static_cast<uint32_t>(syntheticIndex + 1);
     std::size_t position = 0;
+    int chars = 0;
 
     for (int index = 0; index < kMinSyntheticNameLength && position + 1 < capacity; index++) {
         AppendByte(buffer, capacity, position, static_cast<unsigned char>(kBase62Alphabet[value % alphabetSize]));
         value /= static_cast<uint32_t>(alphabetSize);
+        chars++;
+    }
+
+    while (chars < kMinSyntheticNameLength) {
+        AppendDigit(buffer, capacity, position, chars);
     }
 
     buffer[position] = '\0';
@@ -156,13 +294,33 @@ void GenerateSyntheticName(int syntheticIndex, char* buffer, std::size_t capacit
 {
     for (int attempt = 0; attempt < 64; attempt++) {
         std::size_t position = 0;
-        const int nameLength = kMinSyntheticNameLength + static_cast<int>(NextRandom() % (kMaxSyntheticNameLength - kMinSyntheticNameLength + 1));
+        int chars = 0;
+        const int targetLength = kMinSyntheticNameLength + static_cast<int>(NextRandom() % (kMaxSyntheticNameLength - kMinSyntheticNameLength + 1));
+        const int bodyLength = targetLength - 2;
 
-        for (int index = 0; index < nameLength - 2; index++) {
-            AppendRandomNameChar(buffer, capacity, position);
+        if (bodyLength >= 7 && (NextRandom() % 3u) != 0) {
+            const NamePart* prefix = PickPrefix(bodyLength - 4);
+            if (prefix) {
+                AppendPart(buffer, capacity, position, chars, *prefix);
+            }
         }
 
-        AppendUniqueNameSuffix(syntheticIndex, buffer, capacity, position);
+        const NamePart* core = PickCore(bodyLength - chars);
+        if (core) {
+            AppendPart(buffer, capacity, position, chars, *core);
+        }
+
+        while (chars < bodyLength) {
+            const int remaining = bodyLength - chars;
+            const NamePart* suffix = remaining >= 2 && (NextRandom() % 3u) != 0 ? PickSuffix(remaining) : nullptr;
+            if (suffix) {
+                AppendPart(buffer, capacity, position, chars, *suffix);
+            } else {
+                AppendDigit(buffer, capacity, position, chars);
+            }
+        }
+
+        AppendUniqueNameSuffix(syntheticIndex, buffer, capacity, position, chars);
         buffer[position] = '\0';
 
         if (!IsSyntheticNameUsed(buffer, syntheticIndex)) {
