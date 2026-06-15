@@ -50,6 +50,7 @@ if (UNIX)
     )
 
     target_compile_definitions(${TARGET_NAME} PRIVATE
+            _GNU_SOURCE
             LINUX
     )
 else ()
