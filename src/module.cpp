@@ -115,7 +115,6 @@ void HideKnownRuleCvars()
 
 void StartFrame()
 {
-    hide_bots::InstallSendToHook();
     hide_bots::HideSteamBots();
     HideKnownRuleCvars();
 
@@ -206,6 +205,7 @@ AMX_NATIVE_INFO g_Natives[] =
 void OnAmxxAttach()
 {
     MF_AddNatives(g_Natives);
+    hide_bots::InstallSendToHook();
     HideKnownRuleCvars();
 }
 

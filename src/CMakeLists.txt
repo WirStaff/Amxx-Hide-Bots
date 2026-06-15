@@ -19,6 +19,7 @@ add_library(${TARGET_NAME} ${LIBRARY_BUILD_TYPE}
         sdk/amxxmodule.cpp
         sdk/amxxmodule.h
         sdk/moduleconfig.h
+        chooker.h
         sendto_hook.cpp
         sendto_hook.h
         steam_bots.cpp

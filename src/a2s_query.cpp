@@ -206,6 +206,33 @@ bool WritePlayer(ResponseWriter& writer, unsigned char index, const edict_t* ent
     return WritePlayerRecord(writer, index, name, static_cast<int32_t>(entity->v.frags), duration);
 }
 
+bool IsFakePlayerRecord(const PlayerRecord& record)
+{
+    bool matchedFakeClient = false;
+    bool matchedRealClient = false;
+    const int maxPlayers = GetMaxPlayers();
+
+    for (int slot = 1; slot <= maxPlayers; slot++) {
+        edict_t* player = g_engfuncs.pfnPEntityOfEntIndex ? g_engfuncs.pfnPEntityOfEntIndex(slot) : nullptr;
+        if (!IsActivePlayer(player)) {
+            continue;
+        }
+
+        const char* name = GetEngineString(player->v.netname);
+        if (std::strcmp(name, record.name) != 0) {
+            continue;
+        }
+
+        if (IsFakeClient(player)) {
+            matchedFakeClient = true;
+        } else {
+            matchedRealClient = true;
+        }
+    }
+
+    return matchedFakeClient && !matchedRealClient;
+}
+
 bool ReadPlayerRecord(const unsigned char* packetBytes, int packetLength, int& cursor, PlayerRecord& record)
 {
     if (cursor >= packetLength) {
@@ -323,17 +350,16 @@ bool RewriteA2SPlayersIndexes(
     }
 
     const unsigned char* packetBytes = reinterpret_cast<const unsigned char*>(packet);
-    int payloadOffset = 0;
-
-    if (packetLength >= 5
-        && packetBytes[0] == kConnectionlessHeader
-        && packetBytes[1] == kConnectionlessHeader
-        && packetBytes[2] == kConnectionlessHeader
-        && packetBytes[3] == kConnectionlessHeader) {
-        payloadOffset = 4;
+    if (packetLength < 6
+        || packetBytes[0] != kConnectionlessHeader
+        || packetBytes[1] != kConnectionlessHeader
+        || packetBytes[2] != kConnectionlessHeader
+        || packetBytes[3] != kConnectionlessHeader) {
+        return false;
     }
 
-    if (packetLength < payloadOffset + 2 || packetBytes[payloadOffset] != kS2APlayer) {
+    constexpr int payloadOffset = 4;
+    if (packetBytes[payloadOffset] != kS2APlayer) {
         return false;
     }
 
@@ -344,7 +370,7 @@ bool RewriteA2SPlayersIndexes(
     const int recordsPosition = payloadOffset + 2;
 
     ResponseWriter writer(rewrittenPacket, rewrittenCapacity);
-    if (payloadOffset == 4 && !WriteConnectionlessHeader(writer)) {
+    if (!WriteConnectionlessHeader(writer)) {
         return false;
     }
 
@@ -368,19 +394,28 @@ bool RewriteA2SPlayersIndexes(
         }
 
         if (visibleCount < wantedCount) {
+            char syntheticName[64] = {};
+            const bool fakeClient = IsFakePlayerRecord(record);
+            const char* name = fakeClient ? syntheticName : record.name;
+            const float duration = fakeClient ? GetSyntheticPlayerDuration(visibleCount) : record.duration;
+
+            if (fakeClient) {
+                BuildSyntheticPlayerName(visibleCount, syntheticName, sizeof(syntheticName));
+            }
+
             if (!WritePlayerRecord(
                     writer,
                     static_cast<unsigned char>(visibleCount),
-                    record.name,
+                    name,
                     record.score,
-                    record.duration)) {
+                    duration)) {
                 break;
             }
 
-            ++visibleCount;
+            visibleCount++;
         }
 
-        ++parsedCount;
+        visibleCount++;
     }
 
     if (originalCount > 0 && visibleCount == 0) {
