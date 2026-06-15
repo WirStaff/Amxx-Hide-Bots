@@ -14,9 +14,15 @@ else ()
 endif ()
 
 add_library(${TARGET_NAME} ${LIBRARY_BUILD_TYPE}
+        a2s_query.cpp
+        a2s_query.h
         sdk/amxxmodule.cpp
         sdk/amxxmodule.h
         sdk/moduleconfig.h
+        sendto_hook.cpp
+        sendto_hook.h
+        steam_bots.cpp
+        steam_bots.h
         module.cpp
 )
 

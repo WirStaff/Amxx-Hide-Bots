@@ -1,134 +1,60 @@
-#include <isteamgameserver.h>
+#include "a2s_query.h"
+#include "sendto_hook.h"
+#include "steam_bots.h"
+
+#include <cstdint>
 
 #include <sdk/amxxmodule.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
-
-using SteamGameServerFn = ISteamGameServer* (S_CALLTYPE*)();
-
-static ISteamGameServer* g_SteamGameServer = nullptr;
-static int g_BotsCount = 0;
-
-#ifdef _WIN32
-using SteamApiLibrary = HMODULE;
-
-struct SteamApiLibraryRef {
-    SteamApiLibrary library;
-    bool shouldClose;
-};
-
-static SteamApiLibraryRef OpenSteamApiLibrary()
-{
-    if (HMODULE library = GetModuleHandleA("steam_api.dll")) {
-        return { library, false };
-    }
-
-    if (HMODULE library = LoadLibraryA("steam_api.dll")) {
-        return { library, true };
-    }
-
-    return { nullptr, false };
-}
-
-static void* GetSteamSymbol(SteamApiLibrary library, const char* symbol)
-{
-    return reinterpret_cast<void*>(GetProcAddress(library, symbol));
-}
-
-static void CloseSteamApiLibrary(const SteamApiLibraryRef& libraryRef)
-{
-    if (libraryRef.library && libraryRef.shouldClose) {
-        FreeLibrary(libraryRef.library);
-    }
-}
-#else
-using SteamApiLibrary = void*;
-
-struct SteamApiLibraryRef {
-    SteamApiLibrary library;
-    bool shouldClose;
-};
-
-static SteamApiLibraryRef OpenSteamApiLibrary()
-{
-#ifdef RTLD_NOLOAD
-    if (SteamApiLibrary library = dlopen("libsteam_api.so", RTLD_NOW | RTLD_NOLOAD)) {
-        return { library, true };
-    }
-#endif
-
-    if (SteamApiLibrary library = dlopen("libsteam_api.so", RTLD_NOW | RTLD_LOCAL)) {
-        return { library, true };
-    }
-
-    return { nullptr, false };
-}
-
-static void* GetSteamSymbol(SteamApiLibrary library, const char* symbol)
-{
-    return dlsym(library, symbol);
-}
-
-static void CloseSteamApiLibrary(const SteamApiLibraryRef& libraryRef)
-{
-    if (libraryRef.library && libraryRef.shouldClose) {
-        dlclose(libraryRef.library);
-    }
-}
-#endif
-
-static ISteamGameServer* GetExistingSteamGameServer()
-{
-    SteamApiLibraryRef libraryRef = OpenSteamApiLibrary();
-    if (!libraryRef.library) {
-        return nullptr;
-    }
-
-    ISteamGameServer* gameServer = nullptr;
-
-    auto steamGameServer = reinterpret_cast<SteamGameServerFn>(
-        GetSteamSymbol(libraryRef.library, "SteamGameServer"));
-    if (steamGameServer) {
-        gameServer = steamGameServer();
-    }
-
-    if (!gameServer) {
-        auto steamApiGameServer = reinterpret_cast<SteamGameServerFn>(
-            GetSteamSymbol(libraryRef.library, "SteamAPI_SteamGameServer_v015"));
-        if (steamApiGameServer) {
-            gameServer = steamApiGameServer();
-        }
-    }
-
-    CloseSteamApiLibrary(libraryRef);
-    return gameServer;
-}
-
-static void HideSteamBots()
-{
-    if (!g_SteamGameServer) {
-        g_SteamGameServer = GetExistingSteamGameServer();
-    }
-
-    if (g_SteamGameServer) {
-        g_SteamGameServer->SetBotPlayerCount(g_BotsCount);
-    }
-}
-
 void StartFrame()
 {
-    HideSteamBots();
+    hide_bots::InstallSendToHook();
+    hide_bots::HideSteamBots();
 
     SET_META_RESULT(MRES_IGNORED);
 }
 
+void ClientPutInServer(edict_t* pEntity)
+{
+    hide_bots::MarkPlayerConnected(pEntity);
+
+    RETURN_META(MRES_IGNORED);
+}
+
+void ClientDisconnect(edict_t* pEntity)
+{
+    hide_bots::MarkPlayerDisconnected(pEntity);
+
+    RETURN_META(MRES_IGNORED);
+}
+
+int ConnectionlessPacket(const struct netadr_s* net_from, const char* args, char* response_buffer, int* response_buffer_size)
+{
+    static_cast<void>(net_from);
+
+    uint32_t challenge = 0;
+    if (!hide_bots::IsA2SPlayerQuery(args, challenge)) {
+        RETURN_META_VALUE(MRES_IGNORED, 0);
+    }
+
+    if (!response_buffer || !response_buffer_size || *response_buffer_size <= 0) {
+        RETURN_META_VALUE(MRES_SUPERCEDE, 0);
+    }
+
+    const int responseSize = hide_bots::IsA2SPlayerInitialChallenge(challenge)
+        ? hide_bots::BuildA2SChallengeResponse(response_buffer, *response_buffer_size)
+        : hide_bots::BuildA2SPlayersResponse(response_buffer, *response_buffer_size);
+
+    *response_buffer_size = responseSize;
+
+    RETURN_META_VALUE(MRES_SUPERCEDE, responseSize > 0 ? 1 : 0);
+}
+
 cell AMX_NATIVE_CALL NativeSetBotCount(AMX* amx, cell* params)
 {
-    g_BotsCount = params[1];
+    static_cast<void>(amx);
+
+    hide_bots::SetBotCount(params[1]);
     return 0;
 }
 
@@ -141,4 +67,9 @@ AMX_NATIVE_INFO g_Natives[] =
 void OnAmxxAttach()
 {
     MF_AddNatives(g_Natives);
+}
+
+void OnAmxxDetach()
+{
+    hide_bots::RestoreSendToHook();
 }

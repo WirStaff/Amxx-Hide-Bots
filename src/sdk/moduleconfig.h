@@ -15,7 +15,7 @@
  *   to add multiple entries.
  */
 #define MODULE_NAME "Hide Bots"
-#define MODULE_VERSION "1.0.0"
+#define MODULE_VERSION "1.1.0"
 #define MODULE_AUTHOR "Wirstaff"
 #define MODULE_URL "https://t.me/wirstaff_inc"
 #define MODULE_LOGTAG "HB"
@@ -66,7 +66,7 @@
 #define FN_AMXX_ATTACH OnAmxxAttach
 
 /** AMXX Detach (unload) */
-//#define FN_AMXX_DETACH OnAmxxDetach
+#define FN_AMXX_DETACH OnAmxxDetach
 
 /** All plugins loaded
  * Do forward functions init here (MF_RegisterForward)
@@ -114,9 +114,9 @@
 // #define FN_RestoreGlobalState		RestoreGlobalState			/* pfnRestoreGlobalState() */
 // #define FN_ResetGlobalState			ResetGlobalState			/* pfnResetGlobalState() */
 // #define FN_ClientConnect				ClientConnect				/* pfnClientConnect()			(wd) Client has connected */
-// #define FN_ClientDisconnect			ClientDisconnect			/* pfnClientDisconnect()		(wd) Player has left the game */
+ #define FN_ClientDisconnect			ClientDisconnect			/* pfnClientDisconnect()		(wd) Player has left the game */
 // #define FN_ClientKill				ClientKill					/* pfnClientKill()				(wd) Player has typed "kill" */
-// #define FN_ClientPutInServer			ClientPutInServer			/* pfnClientPutInServer()		(wd) Client is entering the game */
+ #define FN_ClientPutInServer			ClientPutInServer			/* pfnClientPutInServer()		(wd) Client is entering the game */
 // #define FN_ClientCommand				ClientCommand				/* pfnClientCommand()			(wd) Player has sent a command (typed or from a bind) */
 // #define FN_ClientUserInfoChanged		ClientUserInfoChanged		/* pfnClientUserInfoChanged()	(wd) Client has updated their setinfo structure */
 // #define FN_ServerActivate			    ServerActivate				/* pfnServerActivate()			(wd) Server is starting a new map */
@@ -143,7 +143,7 @@
 // #define FN_GetWeaponData				GetWeaponData				/* pfnGetWeaponData()			(wd) SDK2 */
 // #define FN_CmdStart					CmdStart					/* pfnCmdStart()				(wd) SDK2 */
 // #define FN_CmdEnd					CmdEnd						/* pfnCmdEnd()					(wd) SDK2 */
-// #define FN_ConnectionlessPacket		ConnectionlessPacket		/* pfnConnectionlessPacket()	(wd) SDK2 */
+ #define FN_ConnectionlessPacket		ConnectionlessPacket		/* pfnConnectionlessPacket()	(wd) SDK2 */
 // #define FN_GetHullBounds				GetHullBounds				/* pfnGetHullBounds()			(wd) SDK2 */
 // #define FN_CreateInstancedBaselines	CreateInstancedBaselines	/* pfnCreateInstancedBaselines()	(wd) SDK2 */
 // #define FN_InconsistentFile			InconsistentFile			/* pfnInconsistentFile()		(wd) SDK2 */
