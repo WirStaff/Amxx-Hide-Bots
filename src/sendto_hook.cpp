@@ -199,7 +199,8 @@ enum class HookKind {
     SendTo,
     Send,
     SendMsg,
-    NetSendPacket
+    NetSendPacket,
+    NetSendPacketRef
 };
 
 struct InlineHook {
@@ -216,6 +217,7 @@ ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, c
 ssize_t HookedSend(int socket, const void* buffer, size_t length, int flags);
 ssize_t HookedSendMsg(int socket, const struct msghdr* message, int flags);
 void HookedNetSendPacket(netsrc_t socket, int length, void* data, netadr_t to);
+void HookedNetSendPacketRef(netsrc_t socket, int length, void* data, const netadr_t& to);
 
 InlineHook g_SendHooks[] = {
     {"sendto", HookKind::SendTo, reinterpret_cast<void*>(&HookedSendTo)},
@@ -232,6 +234,10 @@ InlineHook g_SendHooks[] = {
     {"_Z14NET_SendPacket8netsrc_tiPv8netadr_t", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
     {"NET_SendPacket__F8netsrc_siPv8netadr_s", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
     {"NET_SendPacket__F8netsrc_tiPv8netadr_t", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
+    {"_Z14NET_SendPacket8netsrc_siPvRK8netadr_s", HookKind::NetSendPacketRef, reinterpret_cast<void*>(&HookedNetSendPacketRef)},
+    {"_Z14NET_SendPacket8netsrc_tiPvRK8netadr_t", HookKind::NetSendPacketRef, reinterpret_cast<void*>(&HookedNetSendPacketRef)},
+    {"NET_SendPacket__F8netsrc_siPvRC8netadr_s", HookKind::NetSendPacketRef, reinterpret_cast<void*>(&HookedNetSendPacketRef)},
+    {"NET_SendPacket__F8netsrc_tiPvRC8netadr_t", HookKind::NetSendPacketRef, reinterpret_cast<void*>(&HookedNetSendPacketRef)},
 };
 
 bool g_SendHookInstalled = false;
@@ -240,6 +246,7 @@ using SendToFn = ssize_t (*)(int, const void*, size_t, int, const struct sockadd
 using SendFn = ssize_t (*)(int, const void*, size_t, int);
 using SendMsgFn = ssize_t (*)(int, const struct msghdr*, int);
 using NetSendPacketFn = void (*)(netsrc_t, int, void*, netadr_t);
+using NetSendPacketRefFn = void (*)(netsrc_t, int, void*, const netadr_t&);
 
 void* FollowJump(void* address)
 {
@@ -562,6 +569,21 @@ void CallOriginalNetSendPacket(InlineHook& activeHook, netsrc_t socket, int leng
     InstallAllInlineHooks();
 }
 
+void CallOriginalNetSendPacketRef(InlineHook& activeHook, netsrc_t socket, int length, void* data, const netadr_t& to)
+{
+    if (!activeHook.exportedFunction) {
+        return;
+    }
+
+    RestoreAllInlineHooks();
+
+    g_SendHookCallingOriginal = true;
+    reinterpret_cast<NetSendPacketRefFn>(activeHook.exportedFunction)(socket, length, data, to);
+    g_SendHookCallingOriginal = false;
+
+    InstallAllInlineHooks();
+}
+
 ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, const struct sockaddr* to, socklen_t toLength)
 {
     InlineHook& activeHook = FindHook(HookKind::SendTo, 0);
@@ -645,6 +667,23 @@ void HookedNetSendPacket(netsrc_t socket, int length, void* data, netadr_t to)
     CallOriginalNetSendPacket(activeHook, socket, length, data, to);
 }
 
+void HookedNetSendPacketRef(netsrc_t socket, int length, void* data, const netadr_t& to)
+{
+    InlineHook& activeHook = FindHook(HookKind::NetSendPacketRef, 14);
+
+    if (!g_SendHookCallingOriginal && length > 0) {
+        char rewrittenPacket[4096];
+        int rewrittenLength = 0;
+
+        if (TryRewritePacket(data, static_cast<size_t>(length), rewrittenPacket, sizeof(rewrittenPacket), rewrittenLength)) {
+            CallOriginalNetSendPacketRef(activeHook, socket, rewrittenLength, rewrittenPacket, to);
+            return;
+        }
+    }
+
+    CallOriginalNetSendPacketRef(activeHook, socket, length, data, to);
+}
+
 bool InstallInlineHook(InlineHook& hook, void* exportedFunction, void* replacement)
 {
     if (hook.installed || !exportedFunction || !replacement) {
@@ -719,6 +758,7 @@ void InstallSendToHook()
     g_SendToHookInstalled = hookedWs2 || hookedWsock;
 #else
     if (g_SendHookInstalled) {
+        InstallAllInlineHooks();
         return;
     }
 

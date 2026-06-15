@@ -274,11 +274,7 @@ bool RewriteA2SPlayersIndexes(
     const int countPosition = payloadOffset + 1;
     const int originalCount = rewrittenBytes[countPosition];
     const int maxPlayers = GetMaxPlayers();
-    if (maxPlayers <= 0) {
-        return false;
-    }
-
-    const int wantedCount = originalCount < maxPlayers ? originalCount : maxPlayers;
+    const int wantedCount = maxPlayers > 0 && originalCount > maxPlayers ? maxPlayers : originalCount;
 
     int cursor = payloadOffset + 2;
     int parsedCount = 0;
