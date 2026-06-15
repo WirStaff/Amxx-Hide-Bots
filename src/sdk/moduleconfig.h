@@ -15,7 +15,7 @@
  *   to add multiple entries.
  */
 #define MODULE_NAME "Hide Bots"
-#define MODULE_VERSION "1.1.0"
+#define MODULE_VERSION "1.2.0"
 #define MODULE_AUTHOR "Wirstaff"
 #define MODULE_URL "https://t.me/wirstaff_inc"
 #define MODULE_LOGTAG "HB"
@@ -258,7 +258,7 @@
 // #define FN_WriteCoord						WriteCoord
 // #define FN_WriteString						WriteString
 // #define FN_WriteEntity						WriteEntity
-// #define FN_CVarRegister						CVarRegister
+ #define FN_CVarRegister						CVarRegister
 // #define FN_CVarGetFloat						CVarGetFloat
 // #define FN_CVarGetString						CVarGetString
 // #define FN_CVarSetFloat						CVarSetFloat
@@ -302,7 +302,7 @@
 // #define FN_EndSection						EndSection
 // #define FN_CompareFileTime					CompareFileTime
 // #define FN_GetGameDir						GetGameDir
-// #define FN_Cvar_RegisterVariable				Cvar_RegisterVariable
+ #define FN_Cvar_RegisterVariable				Cvar_RegisterVariable
 // #define FN_FadeClientVolume					FadeClientVolume
 // #define FN_SetClientMaxspeed					SetClientMaxspeed
 // #define FN_CreateFakeClient					CreateFakeClient
@@ -404,7 +404,7 @@
 // #define FN_WriteCoord_Post					WriteCoord_Post
 // #define FN_WriteString_Post					WriteString_Post
 // #define FN_WriteEntity_Post					WriteEntity_Post
-// #define FN_CVarRegister_Post					CVarRegister_Post
+ #define FN_CVarRegister_Post					CVarRegister_Post
 // #define FN_CVarGetFloat_Post					CVarGetFloat_Post
 // #define FN_CVarGetString_Post				CVarGetString_Post
 // #define FN_CVarSetFloat_Post					CVarSetFloat_Post
@@ -448,7 +448,7 @@
 // #define FN_EndSection_Post					EndSection_Post
 // #define FN_CompareFileTime_Post				CompareFileTime_Post
 // #define FN_GetGameDir_Post					GetGameDir_Post
-// #define FN_Cvar_RegisterVariable_Post		Cvar_RegisterVariable_Post
+ #define FN_Cvar_RegisterVariable_Post		Cvar_RegisterVariable_Post
 // #define FN_FadeClientVolume_Post				FadeClientVolume_Post
 // #define FN_SetClientMaxspeed_Post			SetClientMaxspeed_Post
 // #define FN_CreateFakeClient_Post				CreateFakeClient_Post
