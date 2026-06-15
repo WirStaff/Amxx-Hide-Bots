@@ -191,6 +191,14 @@ bool InstallSendToHookFromModule(InlineHook& hook, const char* moduleName)
             : reinterpret_cast<void*>(&HookedSendToWsock));
 }
 
+bool InstallWindowsSendToHooks()
+{
+    const bool hookedWs2 = InstallSendToHookFromModule(g_SendToHooks[0], "ws2_32.dll");
+    const bool hookedWsock = InstallSendToHookFromModule(g_SendToHooks[1], "wsock32.dll");
+
+    return hookedWs2 || hookedWsock || g_SendToHooks[0].installed || g_SendToHooks[1].installed;
+}
+
 }
 #else
 namespace {
@@ -750,12 +758,11 @@ void InstallSendToHook()
 {
 #ifdef _WIN32
     if (g_SendToHookInstalled) {
+        InstallWindowsSendToHooks();
         return;
     }
 
-    const bool hookedWs2 = InstallSendToHookFromModule(g_SendToHooks[0], "ws2_32.dll");
-    const bool hookedWsock = InstallSendToHookFromModule(g_SendToHooks[1], "wsock32.dll");
-    g_SendToHookInstalled = hookedWs2 || hookedWsock;
+    g_SendToHookInstalled = InstallWindowsSendToHooks();
 #else
     if (g_SendHookInstalled) {
         InstallAllInlineHooks();
