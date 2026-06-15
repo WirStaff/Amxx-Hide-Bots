@@ -15,6 +15,7 @@
 #include <dlfcn.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #endif
 
@@ -39,7 +40,7 @@ void* FollowJump(void* address)
 {
     auto* code = reinterpret_cast<unsigned char*>(address);
 
-    for (int i = 0; i < 8 && code; ++i) {
+    for (int i = 0; i < 8 && code; i++) {
         if (code[0] == 0xE9) {
             const int32_t offset = *reinterpret_cast<int32_t*>(code + 1);
             code = code + 5 + offset;
@@ -191,17 +192,43 @@ bool InstallSendToHookFromModule(InlineHook& hook, const char* moduleName)
 #else
 namespace {
 
+enum class HookKind {
+    SendTo,
+    Send,
+    SendMsg
+};
+
 struct InlineHook {
+    const char* symbol = nullptr;
+    HookKind kind = HookKind::SendTo;
+    void* replacement = nullptr;
     void* exportedFunction = nullptr;
     void* target = nullptr;
     unsigned char original[5] = {};
     bool installed = false;
 };
 
-InlineHook g_SendToHook = {};
-bool g_SendToHookInstalled = false;
-bool g_SendToHookCallingOriginal = false;
+ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, const struct sockaddr* to, socklen_t toLength);
+ssize_t HookedSend(int socket, const void* buffer, size_t length, int flags);
+ssize_t HookedSendMsg(int socket, const struct msghdr* message, int flags);
+
+InlineHook g_SendHooks[] = {
+    {"sendto", HookKind::SendTo, reinterpret_cast<void*>(&HookedSendTo)},
+    {"__sendto", HookKind::SendTo, reinterpret_cast<void*>(&HookedSendTo)},
+    {"__libc_sendto", HookKind::SendTo, reinterpret_cast<void*>(&HookedSendTo)},
+    {"send", HookKind::Send, reinterpret_cast<void*>(&HookedSend)},
+    {"__send", HookKind::Send, reinterpret_cast<void*>(&HookedSend)},
+    {"__libc_send", HookKind::Send, reinterpret_cast<void*>(&HookedSend)},
+    {"sendmsg", HookKind::SendMsg, reinterpret_cast<void*>(&HookedSendMsg)},
+    {"__sendmsg", HookKind::SendMsg, reinterpret_cast<void*>(&HookedSendMsg)},
+    {"__libc_sendmsg", HookKind::SendMsg, reinterpret_cast<void*>(&HookedSendMsg)},
+};
+
+bool g_SendHookInstalled = false;
+bool g_SendHookCallingOriginal = false;
 using SendToFn = ssize_t (*)(int, const void*, size_t, int, const struct sockaddr*, socklen_t);
+using SendFn = ssize_t (*)(int, const void*, size_t, int);
+using SendMsgFn = ssize_t (*)(int, const struct msghdr*, int);
 
 void* FollowJump(void* address)
 {
@@ -248,7 +275,126 @@ bool ChangeProtection(void* address, size_t size, int protection)
 
 bool InstallInlineHook(InlineHook& hook, void* exportedFunction, void* replacement);
 void RestoreInlineHook(InlineHook& hook);
-ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, const struct sockaddr* to, socklen_t toLength);
+
+void* ResolveSymbol(const char* symbol)
+{
+    void* resolved = dlsym(RTLD_NEXT, symbol);
+    if (!resolved) {
+        resolved = dlsym(RTLD_DEFAULT, symbol);
+    }
+
+    if (!resolved && std::strcmp(symbol, "sendto") == 0) {
+        resolved = reinterpret_cast<void*>(&sendto);
+    } else if (!resolved && std::strcmp(symbol, "send") == 0) {
+        resolved = reinterpret_cast<void*>(&send);
+    } else if (!resolved && std::strcmp(symbol, "sendmsg") == 0) {
+        resolved = reinterpret_cast<void*>(&sendmsg);
+    }
+
+    return resolved;
+}
+
+bool HasInstalledHook()
+{
+    for (const InlineHook& hook : g_SendHooks) {
+        if (hook.installed) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool IsTargetHookedByAnother(const InlineHook& hook, void* target)
+{
+    for (const InlineHook& installedHook : g_SendHooks) {
+        if (&installedHook != &hook && installedHook.installed && installedHook.target == target) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+InlineHook& FindHook(HookKind kind, int preferredIndex)
+{
+    if (g_SendHooks[preferredIndex].kind == kind && g_SendHooks[preferredIndex].exportedFunction) {
+        return g_SendHooks[preferredIndex];
+    }
+
+    for (InlineHook& hook : g_SendHooks) {
+        if (hook.kind == kind && hook.exportedFunction) {
+            return hook;
+        }
+    }
+
+    return g_SendHooks[preferredIndex];
+}
+
+bool InstallAllInlineHooks()
+{
+    bool installed = false;
+
+    for (InlineHook& hook : g_SendHooks) {
+        if (!hook.exportedFunction) {
+            hook.exportedFunction = ResolveSymbol(hook.symbol);
+        }
+
+        installed = InstallInlineHook(hook, hook.exportedFunction, hook.replacement) || installed;
+    }
+
+    return installed || HasInstalledHook();
+}
+
+void RestoreAllInlineHooks()
+{
+    for (InlineHook& hook : g_SendHooks) {
+        RestoreInlineHook(hook);
+    }
+}
+
+bool TryRewritePacket(const void* packet, size_t packetLength, char* rewrittenPacket, int rewrittenCapacity, int& rewrittenLength)
+{
+    if (!packet || packetLength == 0 || packetLength > static_cast<size_t>(rewrittenCapacity)) {
+        return false;
+    }
+
+    if (packetLength > static_cast<size_t>(INT32_MAX)) {
+        return false;
+    }
+
+    return RewriteA2SPlayersIndexes(
+        reinterpret_cast<const char*>(packet),
+        static_cast<int>(packetLength),
+        rewrittenPacket,
+        rewrittenCapacity,
+        rewrittenLength);
+}
+
+bool CopyMessagePayload(const struct msghdr* message, char* packet, int packetCapacity, size_t& packetLength)
+{
+    if (!message || !message->msg_iov || message->msg_iovlen <= 0) {
+        return false;
+    }
+
+    packetLength = 0;
+
+    for (size_t index = 0; index < static_cast<size_t>(message->msg_iovlen); index++) {
+        const iovec& vector = message->msg_iov[index];
+        if (!vector.iov_base && vector.iov_len > 0) {
+            return false;
+        }
+
+        if (vector.iov_len > static_cast<size_t>(packetCapacity) - packetLength) {
+            return false;
+        }
+
+        std::memcpy(packet + packetLength, vector.iov_base, vector.iov_len);
+        packetLength += vector.iov_len;
+    }
+
+    return packetLength > 0;
+}
 
 ssize_t CallOriginalSendTo(
     InlineHook& activeHook,
@@ -263,9 +409,9 @@ ssize_t CallOriginalSendTo(
         return -1;
     }
 
-    RestoreInlineHook(g_SendToHook);
+    RestoreAllInlineHooks();
 
-    g_SendToHookCallingOriginal = true;
+    g_SendHookCallingOriginal = true;
     const ssize_t result = reinterpret_cast<SendToFn>(activeHook.exportedFunction)(
         socket,
         buffer,
@@ -273,27 +419,58 @@ ssize_t CallOriginalSendTo(
         flags,
         to,
         toLength);
-    g_SendToHookCallingOriginal = false;
+    g_SendHookCallingOriginal = false;
 
-    InstallInlineHook(g_SendToHook, g_SendToHook.exportedFunction, reinterpret_cast<void*>(&HookedSendTo));
+    InstallAllInlineHooks();
+
+    return result;
+}
+
+ssize_t CallOriginalSend(InlineHook& activeHook, int socket, const void* buffer, size_t length, int flags)
+{
+    if (!activeHook.exportedFunction) {
+        return -1;
+    }
+
+    RestoreAllInlineHooks();
+
+    g_SendHookCallingOriginal = true;
+    const ssize_t result = reinterpret_cast<SendFn>(activeHook.exportedFunction)(socket, buffer, length, flags);
+    g_SendHookCallingOriginal = false;
+
+    InstallAllInlineHooks();
+
+    return result;
+}
+
+ssize_t CallOriginalSendMsg(InlineHook& activeHook, int socket, const struct msghdr* message, int flags)
+{
+    if (!activeHook.exportedFunction) {
+        return -1;
+    }
+
+    RestoreAllInlineHooks();
+
+    g_SendHookCallingOriginal = true;
+    const ssize_t result = reinterpret_cast<SendMsgFn>(activeHook.exportedFunction)(socket, message, flags);
+    g_SendHookCallingOriginal = false;
+
+    InstallAllInlineHooks();
 
     return result;
 }
 
 ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, const struct sockaddr* to, socklen_t toLength)
 {
-    if (!g_SendToHookCallingOriginal && buffer && length > 0 && length <= static_cast<size_t>(INT32_MAX)) {
+    InlineHook& activeHook = FindHook(HookKind::SendTo, 0);
+
+    if (!g_SendHookCallingOriginal) {
         char rewrittenPacket[4096];
         int rewrittenLength = 0;
 
-        if (RewriteA2SPlayersIndexes(
-                reinterpret_cast<const char*>(buffer),
-                static_cast<int>(length),
-                rewrittenPacket,
-                sizeof(rewrittenPacket),
-                rewrittenLength)) {
+        if (TryRewritePacket(buffer, length, rewrittenPacket, sizeof(rewrittenPacket), rewrittenLength)) {
             return CallOriginalSendTo(
-                g_SendToHook,
+                activeHook,
                 socket,
                 rewrittenPacket,
                 static_cast<size_t>(rewrittenLength),
@@ -303,7 +480,50 @@ ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, c
         }
     }
 
-    return CallOriginalSendTo(g_SendToHook, socket, buffer, length, flags, to, toLength);
+    return CallOriginalSendTo(activeHook, socket, buffer, length, flags, to, toLength);
+}
+
+ssize_t HookedSend(int socket, const void* buffer, size_t length, int flags)
+{
+    InlineHook& activeHook = FindHook(HookKind::Send, 3);
+
+    if (!g_SendHookCallingOriginal) {
+        char rewrittenPacket[4096];
+        int rewrittenLength = 0;
+
+        if (TryRewritePacket(buffer, length, rewrittenPacket, sizeof(rewrittenPacket), rewrittenLength)) {
+            return CallOriginalSend(activeHook, socket, rewrittenPacket, static_cast<size_t>(rewrittenLength), flags);
+        }
+    }
+
+    return CallOriginalSend(activeHook, socket, buffer, length, flags);
+}
+
+ssize_t HookedSendMsg(int socket, const struct msghdr* message, int flags)
+{
+    InlineHook& activeHook = FindHook(HookKind::SendMsg, 6);
+
+    if (!g_SendHookCallingOriginal) {
+        char packet[4096];
+        char rewrittenPacket[4096];
+        size_t packetLength = 0;
+        int rewrittenLength = 0;
+
+        if (CopyMessagePayload(message, packet, sizeof(packet), packetLength)
+            && TryRewritePacket(packet, packetLength, rewrittenPacket, sizeof(rewrittenPacket), rewrittenLength)) {
+            iovec rewrittenVector = {};
+            rewrittenVector.iov_base = rewrittenPacket;
+            rewrittenVector.iov_len = static_cast<size_t>(rewrittenLength);
+
+            msghdr rewrittenMessage = *message;
+            rewrittenMessage.msg_iov = &rewrittenVector;
+            rewrittenMessage.msg_iovlen = 1;
+
+            return CallOriginalSendMsg(activeHook, socket, &rewrittenMessage, flags);
+        }
+    }
+
+    return CallOriginalSendMsg(activeHook, socket, message, flags);
 }
 
 bool InstallInlineHook(InlineHook& hook, void* exportedFunction, void* replacement)
@@ -314,6 +534,10 @@ bool InstallInlineHook(InlineHook& hook, void* exportedFunction, void* replaceme
 
     auto* target = reinterpret_cast<unsigned char*>(FollowJump(exportedFunction));
     if (!target) {
+        return false;
+    }
+
+    if (IsTargetHookedByAnother(hook, target)) {
         return false;
     }
 
@@ -375,23 +599,11 @@ void InstallSendToHook()
     const bool hookedWsock = InstallSendToHookFromModule(g_SendToHooks[1], "wsock32.dll");
     g_SendToHookInstalled = hookedWs2 || hookedWsock;
 #else
-    if (g_SendToHookInstalled) {
+    if (g_SendHookInstalled) {
         return;
     }
 
-    void* sendtoFunction = dlsym(RTLD_NEXT, "sendto");
-    if (!sendtoFunction) {
-        sendtoFunction = dlsym(RTLD_DEFAULT, "sendto");
-    }
-
-    if (!sendtoFunction) {
-        sendtoFunction = reinterpret_cast<void*>(&sendto);
-    }
-
-    g_SendToHookInstalled = InstallInlineHook(
-        g_SendToHook,
-        sendtoFunction,
-        reinterpret_cast<void*>(&HookedSendTo));
+    g_SendHookInstalled = InstallAllInlineHooks();
 #endif
 }
 
@@ -402,8 +614,8 @@ void RestoreSendToHook()
     RestoreInlineHook(g_SendToHooks[1]);
     g_SendToHookInstalled = false;
 #else
-    RestoreInlineHook(g_SendToHook);
-    g_SendToHookInstalled = false;
+    RestoreAllInlineHooks();
+    g_SendHookInstalled = false;
 #endif
 }
 
