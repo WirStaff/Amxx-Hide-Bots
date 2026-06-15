@@ -23,6 +23,8 @@ add_library(${TARGET_NAME} ${LIBRARY_BUILD_TYPE}
         sendto_hook.h
         steam_bots.cpp
         steam_bots.h
+        synthetic_players.cpp
+        synthetic_players.h
         module.cpp
 )
 

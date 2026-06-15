@@ -1,4 +1,5 @@
 #include "a2s_query.h"
+#include "synthetic_players.h"
 
 #include <cstdint>
 #include <cstring>
@@ -18,6 +19,13 @@ constexpr uint32_t kA2SPlayerChallenge = 0x4842504Cu;
 constexpr int kMaxTrackedPlayers = 32;
 
 float g_PlayerConnectedAt[kMaxTrackedPlayers + 1] = {};
+
+struct PlayerRecord {
+    unsigned char index = 0;
+    const char* name = "";
+    int32_t score = 0;
+    float duration = 0.0f;
+};
 
 class ResponseWriter {
 public:
@@ -103,6 +111,15 @@ uint32_t ReadUInt32(const unsigned char* data)
         | (static_cast<uint32_t>(data[3]) << 24);
 }
 
+float ReadFloat(const unsigned char* data)
+{
+    const uint32_t bits = ReadUInt32(data);
+    float value = 0.0f;
+    static_assert(sizeof(bits) == sizeof(value), "Unexpected float size");
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
 bool WriteConnectionlessHeader(ResponseWriter& writer)
 {
     return writer.WriteByte(kConnectionlessHeader)
@@ -139,6 +156,11 @@ bool IsActivePlayer(const edict_t* entity)
     return name[0] != '\0';
 }
 
+bool IsFakeClient(const edict_t* entity)
+{
+    return entity && (entity->v.flags & FL_FAKECLIENT) != 0;
+}
+
 float GetPlayerDuration(int slot)
 {
     if (!gpGlobals || slot < 1 || slot > kMaxTrackedPlayers) {
@@ -153,9 +175,8 @@ float GetPlayerDuration(int slot)
     return gpGlobals->time - connectedAt;
 }
 
-bool WritePlayer(ResponseWriter& writer, unsigned char index, const edict_t* entity, int slot)
+bool WritePlayerRecord(ResponseWriter& writer, unsigned char index, const char* name, int32_t score, float duration)
 {
-    const char* name = GetEngineString(entity->v.netname);
     const size_t nameLength = std::strlen(name);
     const size_t recordSize = 1 + nameLength + 1 + sizeof(int32_t) + sizeof(float);
 
@@ -165,8 +186,77 @@ bool WritePlayer(ResponseWriter& writer, unsigned char index, const edict_t* ent
 
     return writer.WriteByte(index)
         && writer.WriteBytes(name, static_cast<int>(nameLength + 1))
-        && writer.WriteInt32(static_cast<int32_t>(entity->v.frags))
-        && writer.WriteFloat(GetPlayerDuration(slot));
+        && writer.WriteInt32(score)
+        && writer.WriteFloat(duration);
+}
+
+bool WritePlayer(ResponseWriter& writer, unsigned char index, const edict_t* entity, int slot)
+{
+    char syntheticName[64] = {};
+    const bool fakeClient = IsFakeClient(entity);
+    const char* name = GetEngineString(entity->v.netname);
+    float duration = GetPlayerDuration(slot);
+
+    if (fakeClient) {
+        BuildSyntheticPlayerName(index, syntheticName, sizeof(syntheticName));
+        name = syntheticName;
+        duration = GetSyntheticPlayerDuration(index);
+    }
+
+    return WritePlayerRecord(writer, index, name, static_cast<int32_t>(entity->v.frags), duration);
+}
+
+bool ReadPlayerRecord(const unsigned char* packetBytes, int packetLength, int& cursor, PlayerRecord& record)
+{
+    if (cursor >= packetLength) {
+        return false;
+    }
+
+    record.index = packetBytes[cursor++];
+    const int namePosition = cursor;
+
+    while (cursor < packetLength && packetBytes[cursor] != '\0') {
+        ++cursor;
+    }
+
+    if (cursor >= packetLength) {
+        return false;
+    }
+
+    record.name = reinterpret_cast<const char*>(packetBytes + namePosition);
+    ++cursor;
+
+    if (packetLength - cursor < static_cast<int>(sizeof(int32_t) + sizeof(float))) {
+        return false;
+    }
+
+    record.score = static_cast<int32_t>(ReadUInt32(packetBytes + cursor));
+    cursor += static_cast<int>(sizeof(int32_t));
+    record.duration = ReadFloat(packetBytes + cursor);
+    cursor += static_cast<int>(sizeof(float));
+
+    return true;
+}
+
+int CountZeroIndexes(const unsigned char* packetBytes, int packetLength, int cursor, int originalCount)
+{
+    int zeroIndexes = 0;
+    int parsedCount = 0;
+
+    while (parsedCount < originalCount && cursor < packetLength) {
+        PlayerRecord record;
+        if (!ReadPlayerRecord(packetBytes, packetLength, cursor, record)) {
+            break;
+        }
+
+        if (record.index == 0) {
+            ++zeroIndexes;
+        }
+
+        ++parsedCount;
+    }
+
+    return zeroIndexes;
 }
 
 }
@@ -268,41 +358,61 @@ bool RewriteA2SPlayersIndexes(
         return false;
     }
 
-    std::memcpy(rewrittenPacket, packet, static_cast<size_t>(packetLength));
-
-    unsigned char* rewrittenBytes = reinterpret_cast<unsigned char*>(rewrittenPacket);
     const int countPosition = payloadOffset + 1;
-    const int originalCount = rewrittenBytes[countPosition];
+    const int originalCount = packetBytes[countPosition];
     const int maxPlayers = GetMaxPlayers();
     const int wantedCount = maxPlayers > 0 && originalCount > maxPlayers ? maxPlayers : originalCount;
+    const int recordsPosition = payloadOffset + 2;
+    const int zeroIndexes = CountZeroIndexes(packetBytes, packetLength, recordsPosition, originalCount);
+    const bool rewriteSyntheticBots = zeroIndexes > 1;
 
-    int cursor = payloadOffset + 2;
+    ResponseWriter writer(rewrittenPacket, rewrittenCapacity);
+    if (payloadOffset == 4 && !WriteConnectionlessHeader(writer)) {
+        return false;
+    }
+
+    if (!writer.WriteByte(kS2APlayer)) {
+        return false;
+    }
+
+    const int rewrittenCountPosition = writer.Position();
+    if (!writer.WriteByte(0)) {
+        return false;
+    }
+
+    int cursor = recordsPosition;
     int parsedCount = 0;
     int visibleCount = 0;
 
     while (parsedCount < originalCount && cursor < packetLength) {
-        const int indexPosition = cursor++;
-
-        while (cursor < packetLength && rewrittenBytes[cursor] != '\0') {
-            ++cursor;
-        }
-
-        if (cursor >= packetLength) {
-            break;
-        }
-
-        ++cursor;
-
-        if (packetLength - cursor < static_cast<int>(sizeof(int32_t) + sizeof(float))) {
+        PlayerRecord record;
+        if (!ReadPlayerRecord(packetBytes, packetLength, cursor, record)) {
             break;
         }
 
         if (visibleCount < wantedCount) {
-            rewrittenBytes[indexPosition] = static_cast<unsigned char>(visibleCount);
+            char syntheticName[64] = {};
+            const char* name = record.name;
+            float duration = record.duration;
+
+            if (rewriteSyntheticBots && record.index == 0) {
+                BuildSyntheticPlayerName(visibleCount, syntheticName, sizeof(syntheticName));
+                name = syntheticName;
+                duration = GetSyntheticPlayerDuration(visibleCount);
+            }
+
+            if (!WritePlayerRecord(
+                    writer,
+                    static_cast<unsigned char>(visibleCount),
+                    name,
+                    record.score,
+                    duration)) {
+                break;
+            }
+
             ++visibleCount;
         }
 
-        cursor += static_cast<int>(sizeof(int32_t) + sizeof(float));
         ++parsedCount;
     }
 
@@ -310,8 +420,8 @@ bool RewriteA2SPlayersIndexes(
         return false;
     }
 
-    rewrittenBytes[countPosition] = static_cast<unsigned char>(visibleCount);
-    rewrittenLength = packetLength;
+    writer.SetByte(rewrittenCountPosition, static_cast<unsigned char>(visibleCount));
+    rewrittenLength = writer.Position();
 
     return visibleCount > 0 || originalCount != 0;
 }
