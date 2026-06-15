@@ -7,7 +7,6 @@
 namespace hide_bots {
 
 bool IsA2SPlayerQuery(const char* args, uint32_t& challenge);
-bool IsA2SPlayerQueryPacket(const char* packet, int packetLength, uint32_t& challenge);
 bool IsA2SPlayerInitialChallenge(uint32_t challenge);
 
 int BuildA2SChallengeResponse(char* responseBuffer, int responseBufferSize);

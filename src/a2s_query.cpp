@@ -193,31 +193,6 @@ bool IsA2SPlayerQuery(const char* args, uint32_t& challenge)
     return true;
 }
 
-bool IsA2SPlayerQueryPacket(const char* packet, int packetLength, uint32_t& challenge)
-{
-    if (!packet || packetLength < 5) {
-        return false;
-    }
-
-    const unsigned char* packetBytes = reinterpret_cast<const unsigned char*>(packet);
-    int payloadOffset = 0;
-
-    if (packetLength >= 9
-        && packetBytes[0] == kConnectionlessHeader
-        && packetBytes[1] == kConnectionlessHeader
-        && packetBytes[2] == kConnectionlessHeader
-        && packetBytes[3] == kConnectionlessHeader) {
-        payloadOffset = 4;
-    }
-
-    if (packetLength < payloadOffset + 5 || packetBytes[payloadOffset] != kA2SPlayer) {
-        return false;
-    }
-
-    challenge = ReadUInt32(packetBytes + payloadOffset + 1);
-    return true;
-}
-
 bool IsA2SPlayerInitialChallenge(uint32_t challenge)
 {
     return challenge == kNoChallenge;
