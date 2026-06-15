@@ -12,7 +12,10 @@
 #include <winsock2.h>
 #include <windows.h>
 #else
+#include <cstdio>
 #include <dlfcn.h>
+#include <enums.h>
+#include <netadr.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -195,7 +198,8 @@ namespace {
 enum class HookKind {
     SendTo,
     Send,
-    SendMsg
+    SendMsg,
+    NetSendPacket
 };
 
 struct InlineHook {
@@ -211,6 +215,7 @@ struct InlineHook {
 ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, const struct sockaddr* to, socklen_t toLength);
 ssize_t HookedSend(int socket, const void* buffer, size_t length, int flags);
 ssize_t HookedSendMsg(int socket, const struct msghdr* message, int flags);
+void HookedNetSendPacket(netsrc_t socket, int length, void* data, netadr_t to);
 
 InlineHook g_SendHooks[] = {
     {"sendto", HookKind::SendTo, reinterpret_cast<void*>(&HookedSendTo)},
@@ -222,6 +227,11 @@ InlineHook g_SendHooks[] = {
     {"sendmsg", HookKind::SendMsg, reinterpret_cast<void*>(&HookedSendMsg)},
     {"__sendmsg", HookKind::SendMsg, reinterpret_cast<void*>(&HookedSendMsg)},
     {"__libc_sendmsg", HookKind::SendMsg, reinterpret_cast<void*>(&HookedSendMsg)},
+    {"NET_SendPacket", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
+    {"_Z14NET_SendPacket8netsrc_siPv8netadr_s", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
+    {"_Z14NET_SendPacket8netsrc_tiPv8netadr_t", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
+    {"NET_SendPacket__F8netsrc_siPv8netadr_s", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
+    {"NET_SendPacket__F8netsrc_tiPv8netadr_t", HookKind::NetSendPacket, reinterpret_cast<void*>(&HookedNetSendPacket)},
 };
 
 bool g_SendHookInstalled = false;
@@ -229,6 +239,7 @@ bool g_SendHookCallingOriginal = false;
 using SendToFn = ssize_t (*)(int, const void*, size_t, int, const struct sockaddr*, socklen_t);
 using SendFn = ssize_t (*)(int, const void*, size_t, int);
 using SendMsgFn = ssize_t (*)(int, const struct msghdr*, int);
+using NetSendPacketFn = void (*)(netsrc_t, int, void*, netadr_t);
 
 void* FollowJump(void* address)
 {
@@ -276,6 +287,80 @@ bool ChangeProtection(void* address, size_t size, int protection)
 bool InstallInlineHook(InlineHook& hook, void* exportedFunction, void* replacement);
 void RestoreInlineHook(InlineHook& hook);
 
+void* ResolveSymbolInLoadedModule(const char* moduleName, const char* symbol)
+{
+#ifdef RTLD_NOLOAD
+    void* module = dlopen(moduleName, RTLD_NOW | RTLD_NOLOAD);
+    if (!module) {
+        return nullptr;
+    }
+
+    void* resolved = dlsym(module, symbol);
+    dlclose(module);
+    return resolved;
+#else
+    static_cast<void>(moduleName);
+    static_cast<void>(symbol);
+    return nullptr;
+#endif
+}
+
+void* ResolveSymbolInMappedModule(const char* moduleName, const char* symbol)
+{
+    FILE* maps = std::fopen("/proc/self/maps", "r");
+    if (!maps) {
+        return nullptr;
+    }
+
+    char line[1024];
+    void* resolved = nullptr;
+
+    while (!resolved && std::fgets(line, sizeof(line), maps)) {
+        if (!std::strstr(line, moduleName)) {
+            continue;
+        }
+
+        char* path = std::strchr(line, '/');
+        if (!path) {
+            continue;
+        }
+
+        char* end = std::strchr(path, '\n');
+        if (end) {
+            *end = '\0';
+        }
+
+        resolved = ResolveSymbolInLoadedModule(path, symbol);
+    }
+
+    std::fclose(maps);
+    return resolved;
+}
+
+void* ResolveEngineSymbol(const char* symbol)
+{
+    const char* modules[] = {
+        "engine_i486.so",
+        "engine_i686.so",
+        "engine_amd.so",
+        "engine.so",
+        "swds.so",
+        "hw.so",
+    };
+
+    for (const char* moduleName : modules) {
+        if (void* resolved = ResolveSymbolInLoadedModule(moduleName, symbol)) {
+            return resolved;
+        }
+
+        if (void* resolved = ResolveSymbolInMappedModule(moduleName, symbol)) {
+            return resolved;
+        }
+    }
+
+    return nullptr;
+}
+
 void* ResolveSymbol(const char* symbol)
 {
     void* resolved = dlsym(RTLD_NEXT, symbol);
@@ -289,6 +374,8 @@ void* ResolveSymbol(const char* symbol)
         resolved = reinterpret_cast<void*>(&send);
     } else if (!resolved && std::strcmp(symbol, "sendmsg") == 0) {
         resolved = reinterpret_cast<void*>(&sendmsg);
+    } else if (!resolved && std::strstr(symbol, "NET_SendPacket")) {
+        resolved = ResolveEngineSymbol(symbol);
     }
 
     return resolved;
@@ -460,6 +547,21 @@ ssize_t CallOriginalSendMsg(InlineHook& activeHook, int socket, const struct msg
     return result;
 }
 
+void CallOriginalNetSendPacket(InlineHook& activeHook, netsrc_t socket, int length, void* data, netadr_t to)
+{
+    if (!activeHook.exportedFunction) {
+        return;
+    }
+
+    RestoreAllInlineHooks();
+
+    g_SendHookCallingOriginal = true;
+    reinterpret_cast<NetSendPacketFn>(activeHook.exportedFunction)(socket, length, data, to);
+    g_SendHookCallingOriginal = false;
+
+    InstallAllInlineHooks();
+}
+
 ssize_t HookedSendTo(int socket, const void* buffer, size_t length, int flags, const struct sockaddr* to, socklen_t toLength)
 {
     InlineHook& activeHook = FindHook(HookKind::SendTo, 0);
@@ -524,6 +626,23 @@ ssize_t HookedSendMsg(int socket, const struct msghdr* message, int flags)
     }
 
     return CallOriginalSendMsg(activeHook, socket, message, flags);
+}
+
+void HookedNetSendPacket(netsrc_t socket, int length, void* data, netadr_t to)
+{
+    InlineHook& activeHook = FindHook(HookKind::NetSendPacket, 9);
+
+    if (!g_SendHookCallingOriginal && length > 0) {
+        char rewrittenPacket[4096];
+        int rewrittenLength = 0;
+
+        if (TryRewritePacket(data, static_cast<size_t>(length), rewrittenPacket, sizeof(rewrittenPacket), rewrittenLength)) {
+            CallOriginalNetSendPacket(activeHook, socket, rewrittenLength, rewrittenPacket, to);
+            return;
+        }
+    }
+
+    CallOriginalNetSendPacket(activeHook, socket, length, data, to);
 }
 
 bool InstallInlineHook(InlineHook& hook, void* exportedFunction, void* replacement)
