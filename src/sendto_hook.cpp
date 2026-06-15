@@ -764,12 +764,9 @@ void InstallSendToHook()
 
     g_SendToHookInstalled = InstallWindowsSendToHooks();
 #else
-    if (g_SendHookInstalled) {
-        InstallAllInlineHooks();
-        return;
-    }
-
-    g_SendHookInstalled = InstallAllInlineHooks();
+    // Linux handles A2S_PLAYER through Metamod's ConnectionlessPacket hook.
+    // Inline hooks here intercept every outgoing packet and add measurable latency.
+    g_SendHookInstalled = false;
 #endif
 }
 
@@ -780,7 +777,6 @@ void RestoreSendToHook()
     RestoreInlineHook(g_SendToHooks[1]);
     g_SendToHookInstalled = false;
 #else
-    RestoreAllInlineHooks();
     g_SendHookInstalled = false;
 #endif
 }
